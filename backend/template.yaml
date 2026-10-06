@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Yaadi backend -- single Lambda function (FastAPI via Mangum) behind a
+  Function URL, one DynamoDB table, and an S3 bucket for attachments.
+  See docs/BACKEND_ARCHITECTURE.md and docs/INFRA_AND_COST.md.
+
+Parameters:
+  AllowedOrigins:
+    Type: String
+    Default: "*"
+    Description: Comma-separated list of allowed CORS origins for the frontend (e.g. the Vercel URL).
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 256
+    Runtime: python3.11
+
+Resources:
+  YaadiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: app/
+      Handler: main.handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref YaadiTable
+          ATTACHMENTS_BUCKET: !Ref AttachmentsBucket
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - !Ref AllowedOrigins
+          AllowMethods:
+            - "*"
+          AllowHeaders:
+            - "*"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref YaadiTable
+        - S3CrudPolicy:
+            BucketName: !Ref AttachmentsBucket
+        - SSMParameterReadPolicy:
+            ParameterName: yaadi/*
+
+  YaadiTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: yaadi
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  AttachmentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "yaadi-attachments-${AWS::AccountId}"
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref AllowedOrigins
+            AllowedMethods: [GET, PUT]
+            AllowedHeaders: ["*"]
+
+Outputs:
+  FunctionUrl:
+    Description: Public HTTPS endpoint for the API.
+    Value: !GetAtt YaadiFunctionUrl.FunctionUrl
+  TableName:
+    Value: !Ref YaadiTable
+  BucketName:
+    Value: !Ref AttachmentsBucket

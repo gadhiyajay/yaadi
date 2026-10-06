@@ -1,0 +1,34 @@
+from .conftest import TEST_PASSWORD
+
+
+def test_login_success(client):
+    resp = client.post("/auth/login", json={"password": TEST_PASSWORD})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_token"]
+    assert body["refresh_token"]
+
+
+def test_login_wrong_password(client):
+    resp = client.post("/auth/login", json={"password": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_refresh(client):
+    login = client.post("/auth/login", json={"password": TEST_PASSWORD})
+    refresh_token = login.json()["refresh_token"]
+    resp = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    assert resp.status_code == 200
+    assert resp.json()["access_token"]
+
+
+def test_refresh_rejects_access_token(client):
+    login = client.post("/auth/login", json={"password": TEST_PASSWORD})
+    access_token = login.json()["access_token"]
+    resp = client.post("/auth/refresh", json={"refresh_token": access_token})
+    assert resp.status_code == 401
+
+
+def test_notes_requires_auth(client):
+    resp = client.get("/notes")
+    assert resp.status_code == 403  # no bearer credentials supplied at all

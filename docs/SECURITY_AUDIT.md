@@ -9,7 +9,7 @@
 
 | # | Finding | Severity |
 |---|---|---|
-| 1 | No brute-force protection on `POST /auth/login` | Medium |
+| 1 | ~~No brute-force protection on `POST /auth/login`~~ — **Fixed** | Medium |
 | 2 | Compromised tokens can't be revoked; changing the password doesn't end existing sessions | Medium |
 | 3 | CORS is wide open (`AllowOrigins: "*"`) by default | Low |
 | 4 | S3 attachments bucket has no explicit Public Access Block in the template | Needs validation |
@@ -20,9 +20,10 @@ Nothing rated **High** or **Critical** was found. The core auth and data-access 
 
 ---
 
-## Finding 1 — No brute-force protection on `POST /auth/login`
+## Finding 1 — No brute-force protection on `POST /auth/login` — Fixed
 
 **Severity:** Medium
+**Status:** Fixed — `auth.py` now locks out `/auth/login` after 5 consecutive failures, with an escalating cooldown (1m → 5m → 30m → 2h → 24h) backed by an atomic counter in DynamoDB (`db.record_login_failure`/`clear_login_throttle`). See `tests/test_auth.py::test_login_locks_out_after_repeated_failures` and `::test_successful_login_resets_the_failure_counter`.
 
 **Where:** `backend/app/auth.py:17-24`, `backend/template.yaml` (`FunctionUrlConfig.AuthType: NONE`)
 

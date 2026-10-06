@@ -1,0 +1,1 @@
+- Can i do something in windows like i right click anywhere, and i get option to save in Yaadi, so that i can save anything to my app, same thing from my phone, if i want to share something from my phone that can directly land into my notes, is that possible?

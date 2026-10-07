@@ -2,8 +2,6 @@
 
 Last-write-wins by `updated_at`, no operational transforms.
 """
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends
 
 import db
@@ -29,10 +27,20 @@ def pull(since: str = EPOCH) -> SyncPullResponse:
     items = db.query_updated_since(since)
     notes = [item_to_note(i) for i in items if i["SK"].startswith("NOTE#")]
     folders = [item_to_folder(i) for i in items if i["SK"].startswith("FOLDER#")]
+
+    # The next cursor must never run ahead of data we've actually seen.
+    # `updated_at` is set by each client's own clock (see _push_note/_push_
+    # folder below), which can drift from this server's clock -- stamping
+    # the cursor with the server's `now()` risked permanently skipping any
+    # item whose client-assigned `updated_at` fell behind that `now()`
+    # before it had a chance to sync. Anchoring to the max `updated_at` we
+    # actually returned (or leaving the cursor unmoved when nothing came
+    # back) only ever moves the cursor as far as confirmed data.
+    synced_at = max((i["updated_at"] for i in items), default=since)
     return SyncPullResponse(
         notes=notes,
         folders=folders,
-        synced_at=datetime.now(timezone.utc).isoformat(),
+        synced_at=synced_at,
     )
 
 

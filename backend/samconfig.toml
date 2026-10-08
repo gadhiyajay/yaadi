@@ -8,7 +8,7 @@ region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 disable_rollback = true
-parameter_overrides = "AllowedOrigins=\"https://yaadi.jaylabs.uk\""
+parameter_overrides = "AllowedOrigins=\"https://yaadi.jaylabs.uk,http://localhost:5173,http://localhost:5174\""
 image_repositories = []
 
 [default.global.parameters]

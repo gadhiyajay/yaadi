@@ -30,8 +30,7 @@ Resources:
       FunctionUrlConfig:
         AuthType: NONE
         Cors:
-          AllowOrigins:
-            - !Ref AllowedOrigins
+          AllowOrigins: !Split [",", !Ref AllowedOrigins]
           AllowMethods:
             - "*"
           AllowHeaders:
@@ -79,8 +78,7 @@ Resources:
       BucketName: !Sub "yaadi-attachments-${AWS::AccountId}"
       CorsConfiguration:
         CorsRules:
-          - AllowedOrigins:
-              - !Ref AllowedOrigins
+          - AllowedOrigins: !Split [",", !Ref AllowedOrigins]
             AllowedMethods: [GET, PUT]
             AllowedHeaders: ["*"]
 

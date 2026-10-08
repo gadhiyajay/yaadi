@@ -92,6 +92,22 @@ def test_push_rejects_stale_write_last_write_wins(client, auth_headers):
     assert result["server_item"]["title"] == "Newer"
 
 
+def test_pull_does_not_choke_on_attachments(client, auth_headers):
+    # Attachments share GSI1 with notes/folders (same "what changed since"
+    # query) but only ever have `created_at`, never `updated_at` -- pull
+    # must not assume every GSI1 item has `updated_at`.
+    note = client.post("/notes", json={"title": "Has an attachment"}, headers=auth_headers).json()
+    client.post(
+        "/attachments/presign-upload",
+        json={"note_id": note["id"], "content_type": "image/png"},
+        headers=auth_headers,
+    )
+
+    pull = client.get("/sync/pull", headers=auth_headers)
+    assert pull.status_code == 200
+    assert len(pull.json()["notes"]) == 1
+
+
 def test_push_folder_tombstone_propagates(client, auth_headers):
     now = _iso(datetime.now(timezone.utc))
     client.post(

@@ -36,7 +36,15 @@ def pull(since: str = EPOCH) -> SyncPullResponse:
     # before it had a chance to sync. Anchoring to the max `updated_at` we
     # actually returned (or leaving the cursor unmoved when nothing came
     # back) only ever moves the cursor as far as confirmed data.
-    synced_at = max((i["updated_at"] for i in items), default=since)
+    #
+    # Built from `notes`/`folders`, not the raw `items` from GSI1 -- that
+    # query also picks up attachment records (they're indexed on GSI1 too,
+    # for the same "what's changed" query) which only ever have
+    # `created_at`, never `updated_at`.
+    synced_at = max(
+        (i.updated_at for i in (*notes, *folders)),
+        default=since,
+    )
     return SyncPullResponse(
         notes=notes,
         folders=folders,

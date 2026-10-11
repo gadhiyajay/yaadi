@@ -76,6 +76,11 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "yaadi-attachments-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins: !Split [",", !Ref AllowedOrigins]

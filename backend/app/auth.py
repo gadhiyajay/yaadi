@@ -3,8 +3,6 @@
 Single hardcoded account, see docs/BACKEND_ARCHITECTURE.md -- no registration
 endpoint, no users table.
 """
-from datetime import datetime, timezone
-
 import jwt
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -25,14 +23,10 @@ LOGIN_LOCKOUT_THRESHOLD = 5
 LOGIN_LOCKOUT_DURATIONS_SECONDS = [60, 300, 1800, 7200, 86400]
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest) -> TokenResponse:
     throttle = db.get_login_throttle()
-    if throttle and throttle.get("locked_until", "") > _now():
+    if throttle and throttle.get("locked_until", "") > db.now():
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
 
     if not security.verify_password(body.password):

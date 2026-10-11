@@ -10,9 +10,9 @@
 | # | Finding | Severity |
 |---|---|---|
 | 1 | ~~No brute-force protection on `POST /auth/login`~~ — **Fixed** | Medium |
-| 2 | Compromised tokens can't be revoked; changing the password doesn't end existing sessions | Medium |
+| 2 | ~~Changing the password doesn't end existing sessions~~ — **Fixed** (individual tokens still can't be revoked) | Medium |
 | 3 | CORS is wide open (`AllowOrigins: "*"`) by default | Low |
-| 4 | S3 attachments bucket has no explicit Public Access Block in the template | Needs validation |
+| 4 | ~~S3 attachments bucket has no explicit Public Access Block in the template~~ — **Fixed** | Needs validation |
 | 5 | SSM secrets use the default AWS-managed KMS key | Informational |
 | 6 | Dependencies are version-pinned with no automated vulnerability scanning | Informational |
 
@@ -43,6 +43,7 @@ Argon2 (the default `PasswordHasher()` params: ~64 MiB memory, time_cost 2, para
 ## Finding 2 — Compromised tokens can't be revoked; changing the password doesn't end existing sessions
 
 **Severity:** Medium
+**Status:** Partly fixed (2026-10-09) — `set_password.py` now always regenerates `/yaadi/jwt_secret`, so a password change invalidates every outstanding token once the Lambda cold-starts (force it by redeploying or updating the function config). Still open: there's no per-token revocation, and a leaked refresh token stays valid for 30 days unless you rotate.
 
 **Where:** `backend/app/security.py:60-78`, `backend/scripts/set_password.py:40-46`
 
@@ -77,6 +78,7 @@ Argon2 (the default `PasswordHasher()` params: ~64 MiB memory, time_cost 2, para
 ## Finding 4 — S3 attachments bucket has no explicit Public Access Block (Needs validation)
 
 **Severity:** Needs validation (no severity assigned — see methodology)
+**Status:** Fixed (2026-10-09) — `template.yaml` now sets all four `PublicAccessBlockConfiguration` flags on `AttachmentsBucket`, so this no longer depends on account defaults.
 
 **Where:** `backend/template.yaml:76-85`
 

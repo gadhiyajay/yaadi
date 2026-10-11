@@ -53,10 +53,6 @@ def verify_password(password: str) -> bool:
         return False
 
 
-def hash_password(password: str) -> str:
-    return _hasher.hash(password)
-
-
 def _create_token(token_type: str, expires_in_seconds: int) -> str:
     now = int(time.time())
     payload = {"type": token_type, "iat": now, "exp": now + expires_in_seconds}

@@ -41,11 +41,14 @@ class NoteCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+# PATCH bodies: omit a field to leave it alone. Only the *_id fields accept an
+# explicit null (move to root); a null title/content/tags/name is a 422, since
+# writing it would break every later read of that item.
 class NoteUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
+    title: str = None
+    content: str = None
     folder_id: Optional[str] = None
-    tags: Optional[list[str]] = None
+    tags: list[str] = None
 
 
 # --- folders ---
@@ -66,20 +69,11 @@ class FolderCreate(BaseModel):
 
 
 class FolderUpdate(BaseModel):
-    name: Optional[str] = None
+    name: str = None
     parent_folder_id: Optional[str] = None
 
 
 # --- attachments ---
-
-
-class Attachment(BaseModel):
-    id: str
-    note_id: str
-    s3_key: str
-    content_type: str
-    size_bytes: int
-    created_at: str
 
 
 class PresignUploadRequest(BaseModel):

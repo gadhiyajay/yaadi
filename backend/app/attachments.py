@@ -5,7 +5,6 @@ payload. See docs/BACKEND_ARCHITECTURE.md.
 """
 import os
 import uuid
-from datetime import datetime, timezone
 
 import boto3
 from fastapi import APIRouter, Depends, HTTPException
@@ -41,7 +40,7 @@ def presign_upload(body: PresignUploadRequest) -> PresignUploadResponse:
         ExpiresIn=PRESIGN_EXPIRY_SECONDS,
     )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = db.now()
     item = {
         "PK": db.user_pk(),
         "SK": db.attachment_sk(attachment_id),

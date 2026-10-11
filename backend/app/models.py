@@ -97,6 +97,14 @@ class DownloadUrlResponse(BaseModel):
     download_url: str
 
 
+# --- links ---
+
+
+class LinkPreview(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
 # --- sync ---
 
 

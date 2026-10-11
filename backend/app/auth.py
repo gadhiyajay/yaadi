@@ -6,7 +6,7 @@ endpoint, no users table.
 from datetime import datetime, timezone
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import db
@@ -29,17 +29,25 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _client_ip(request: Request) -> str:
+    # In Lambda every request carries the Worker's secret (main.py), so
+    # X-Client-IP is the Worker's own copy of CF-Connecting-IP, not something
+    # a caller can spoof. Locally there's no Worker; use the socket address.
+    return request.headers.get("x-client-ip") or (request.client.host if request.client else "unknown")
+
+
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest) -> TokenResponse:
-    throttle = db.get_login_throttle()
+def login(body: LoginRequest, request: Request) -> TokenResponse:
+    ip = _client_ip(request)
+    throttle = db.get_login_throttle(ip)
     if throttle and throttle.get("locked_until", "") > _now():
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
 
     if not security.verify_password(body.password):
-        db.record_login_failure(LOGIN_LOCKOUT_THRESHOLD, LOGIN_LOCKOUT_DURATIONS_SECONDS)
+        db.record_login_failure(ip, LOGIN_LOCKOUT_THRESHOLD, LOGIN_LOCKOUT_DURATIONS_SECONDS)
         raise HTTPException(status_code=401, detail="Invalid password")
 
-    db.clear_login_throttle()
+    db.clear_login_throttle(ip)
     return TokenResponse(
         access_token=security.create_access_token(),
         refresh_token=security.create_refresh_token(),

@@ -32,14 +32,14 @@ There's no separate lint command configured; match existing style (no formatter/
 
 ## Architecture
 
-**Request flow**: Browser/PWA → Lambda Function URL → Mangum → FastAPI app → DynamoDB / S3 / SSM Parameter Store.
+**Request flow**: Browser/PWA → `api.yaadi.jaylabs.uk` → Cloudflare Worker (`yaadi-app/worker.js`) → Lambda Function URL → Mangum → FastAPI app → DynamoDB / S3 / SSM Parameter Store. The Worker adds `X-Origin-Secret` (SSM `/yaadi/origin_secret`, same value as the Worker secret `ORIGIN_SECRET`) and `X-Client-IP`; the middleware in `main.py` 403s any request in Lambda without the secret, so the raw Function URL is useless on its own. Locally (not in Lambda) the check is off.
 
 **Deployment unit**: `template.yaml` (AWS SAM) defines everything — one Lambda function, its Function URL, one DynamoDB table, one S3 bucket, and an IAM role scoped to just those two resources. `CodeUri: app/` means `app/` is flattened to the Lambda root at deploy time, so modules inside `app/` import each other as flat siblings (`import db`, not `from app import db`) — `tests/conftest.py` mirrors this by inserting `app/` onto `sys.path` rather than treating it as a package.
 
 **Auth — single hardcoded account, no registration**:
 - `scripts/set_password.py` is a one-off bootstrap: hashes a password with argon2 and writes it, plus a generated JWT signing secret, to SSM Parameter Store (`/yaadi/password_hash`, `/yaadi/jwt_secret`) as `SecureString`s. Re-running it rotates the password but currently leaves the JWT secret untouched if one already exists (see `docs/SECURITY_AUDIT.md` Finding 2 — known gap, tokens outlive a password change).
 - `auth.py` issues a 15-minute access JWT and a 30-day refresh JWT on successful login. `get_current_user` (the auth dependency used on every protected router) just validates the access token's signature/expiry/`type` claim — there's no session store or revocation.
-- Login has a DynamoDB-backed lockout (`db.record_login_failure`): 5 consecutive failures triggers an escalating lockout (1m → 5m → 30m → 2h → 24h, capped).
+- Login has a DynamoDB-backed lockout (`db.record_login_failure`), **per client IP** (`SK = LOGIN_THROTTLE#<ip>`, IP from the Worker-set `X-Client-IP`): 5 consecutive failures from one IP triggers an escalating lockout for that IP (1m → 5m → 30m → 2h → 24h, capped). Per-IP so a stranger can't lock the owner out; trusting `X-Client-IP` is only safe because of the origin-secret check.
 - `security.py` caches the SSM-fetched password hash and JWT secret in module-level dicts for the Lambda execution context's lifetime — don't assume every request does a fresh SSM call.
 
 **Data — DynamoDB single-table design** (see `docs/BACKEND_ARCHITECTURE.md` for the full table): one table, `PK = USER#<id>` (hardcoded `USER_ID = "me"` in `db.py`), `SK = <TYPE>#<item_id>` for notes/folders/attachments. `GSI1` (`GSI1PK = PK`, `GSI1SK = UPDATED#<iso_timestamp>#<item_id>`) exists solely to serve the sync endpoint's "everything changed since timestamp X" query across all item types. Every router module keeps its own `item_to_X` / `X_to_item` mapper functions next to its routes (`notes.py`, `folders.py`) rather than centralizing them in `db.py` or `models.py` — `sync.py` imports those mappers directly rather than duplicating them.
@@ -49,6 +49,8 @@ There's no separate lint command configured; match existing style (no formatter/
 **Sync is the one non-trivial contract** (`sync.py`, mirrored client-side in `yaadi-app`): last-write-wins by `updated_at`, no CRDT/OT. `POST /sync/push` only accepts an incoming item if its `updated_at` is strictly newer than the stored one; otherwise it rejects and hands back the server's copy so the client can reconcile. `GET /sync/pull?since=` anchors its returned cursor to the max `updated_at` actually seen in the result set (never to the server's own clock) — this is deliberate, re-read the comment in `sync.py::pull` before changing it, since using server-now as the cursor can permanently skip items a client-clock-skewed device wrote just before.
 
 **Attachments never transit the Lambda payload** — `attachments.py` only ever hands out short-lived (5 min) S3 presigned PUT/GET URLs; the actual file bytes go client ↔ S3 directly.
+
+**`links.py` fetches user-supplied URLs** (`GET /links/preview`, og:title/description via stdlib only) — every fetch and every redirect hop goes through `_check_public`, which refuses non-public IPs. Keep that guard on any new outbound fetch (see Finding 7 in `docs/SECURITY_AUDIT.md`).
 
 **CORS is handled only by the Function URL's own config in `template.yaml`** (`AllowedOrigins` parameter), not by FastAPI middleware — adding `CORSMiddleware` in `main.py` would double up the `Access-Control-Allow-Origin` header. See the module docstring in `main.py` before touching CORS.
 

@@ -5,10 +5,13 @@ FastAPI app, deployed as a single AWS Lambda function behind a Lambda Function U
 ## Request flow
 
 ```
-Browser/PWA (Vercel)
-      │  HTTPS, fetch()
+Browser/PWA (yaadi.jaylabs.uk)
+      │  HTTPS, fetch('https://api.yaadi.jaylabs.uk/...')  -- cross-origin; CORS answered by the Function URL
       ▼
-Lambda Function URL  ──▶  Mangum adapter  ──▶  FastAPI app
+Cloudflare Worker (yaadi-app/worker.js)   adds X-Origin-Secret + X-Client-IP
+      │
+      ▼
+Lambda Function URL  (main.py 403s anything without X-Origin-Secret)  ──▶  Mangum adapter  ──▶  FastAPI app
                                                    │
                          ┌─────────────────────────┼─────────────────────────┐
                          ▼                         ▼                         ▼
@@ -27,6 +30,7 @@ backend/
     folders.py              # /folders CRUD
     sync.py                   # /sync/pull, /sync/push — see APP_ARCHITECTURE.md
     attachments.py              # /attachments/presign-upload
+    links.py                    # /links/preview — og:title/description for a shared link
     db.py                         # boto3 DynamoDB resource + table helpers
     security.py                    # argon2 hashing, JWT encode/decode, SSM secret cache
     models.py                       # pydantic request/response models
@@ -79,6 +83,10 @@ Images/files pasted into a note don't go through Lambda's payload (keeps Lambda 
 2. Backend returns a pre-signed S3 PUT URL (and the `s3_key` it generated).
 3. Client uploads the file **directly to S3**, then saves the `s3_key` reference on the note.
 4. Reading an attachment later: backend returns a pre-signed GET URL on request (short-lived, so the S3 bucket stays private).
+
+## Link previews
+
+`GET /links/preview?url=` returns `{title, description}` read from the page's own link-preview tags (`og:title`/`og:description`, falling back to `<title>`/`meta description`; YouTube goes through its oEmbed endpoint). Stdlib only (`urllib` + `html.parser`), 5 s timeout, first 512 KB. Always 200 — any failure (403, timeout, blocked) returns nulls and the client keeps the bare URL. Every fetch, and every redirect hop, is refused unless the host resolves only to public IPs (so it can't reach the Lambda Runtime API on `127.0.0.1:9001`). See `docs/LINK_SUMMARIES_PLAN.md`.
 
 ## Deployment
 

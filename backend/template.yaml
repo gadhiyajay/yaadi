@@ -35,6 +35,10 @@ Resources:
             - "*"
           AllowHeaders:
             - "*"
+          # The app calls api.yaadi.jaylabs.uk cross-origin with an Authorization
+          # header, so every call needs a preflight; let browsers cache it
+          # (Chrome caps this at 2h).
+          MaxAge: 7200
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref YaadiTable

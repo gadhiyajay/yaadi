@@ -15,6 +15,8 @@
 | 4 | S3 attachments bucket has no explicit Public Access Block in the template | Needs validation |
 | 5 | SSM secrets use the default AWS-managed KMS key | Informational |
 | 6 | Dependencies are version-pinned with no automated vulnerability scanning | Informational |
+| 7 | `GET /links/preview` fetches user-supplied URLs (SSRF surface) — **Mitigated** | Low |
+| 8 | ~~Anyone could lock the owner out of `/auth/login` (global lockout counter)~~ — **Fixed** | Medium |
 
 Nothing rated **High** or **Critical** was found. The core auth and data-access logic is sound (see "What's already solid" below).
 
@@ -70,7 +72,9 @@ Argon2 (the default `PasswordHasher()` params: ~64 MiB memory, time_cost 2, para
 
 **Impact:** Low — it's a defense-in-depth gap, not a demonstrated exploit path. It does mean any website can hit `/health` and `/auth/login` cross-origin (login attempts would still need the real password), and it removes one layer of protection if the frontend's token-storage model ever changes.
 
-**Fix:** Set `AllowedOrigins` to your actual Vercel domain(s) in `samconfig.toml`'s `parameter_overrides` for production deploys instead of relying on the `"*"` default. Keep `"*"` only for local/dev convenience if needed.
+**Update:** the app now calls the API at `api.yaadi.jaylabs.uk` (a Cloudflare Worker that adds a secret header), and the Function URL rejects requests without that secret, so cross-origin calls straight to the Function URL get nothing useful regardless of CORS. `samconfig.toml` already restricts `AllowedOrigins` to the app and localhost dev origins.
+
+**Fix:** Set `AllowedOrigins` to your actual frontend domain(s) in `samconfig.toml`'s `parameter_overrides` for production deploys instead of relying on the `"*"` default. Keep `"*"` only for local/dev convenience if needed.
 
 ---
 
@@ -120,6 +124,39 @@ Argon2 (the default `PasswordHasher()` params: ~64 MiB memory, time_cost 2, para
 **Issue:** `fastapi==0.115.0`, `mangum==0.17.0`, `boto3==1.34.162`, `pydantic==2.9.2`, `pyjwt==2.9.0`, `argon2-cffi==23.1.0` are all exact-pinned (good for reproducibility) but there's no Dependabot/`pip-audit`/CI check to flag a future CVE in one of them. Nothing in the current pinned set has a known issue reviewed here, and the auth-relevant usage (`jwt.decode(..., algorithms=["HS256"])` with an explicit algorithm list) is already written in the safe pattern that avoids the classic PyJWT "algorithm confusion" class of bug.
 
 **Fix (optional, low effort):** Turn on GitHub's Dependabot security updates for this repo (free, zero config beyond enabling it) once the repo is pushed to GitHub.
+
+---
+
+## Finding 7 — `GET /links/preview` fetches user-supplied URLs — Mitigated
+
+**Where:** `backend/app/links.py`
+
+The endpoint makes an outbound HTTP request to whatever URL the client sends, which is a classic SSRF shape. Inside Lambda the interesting internal target is the Runtime API on `127.0.0.1:9001` (`AWS_LAMBDA_RUNTIME_API`); the function isn't in a VPC and Lambda has no instance-metadata endpoint, so there's little else to reach.
+
+**Mitigation in place:** `_check_public` resolves the host and refuses unless *every* address is `ipaddress.ip_address(...).is_global` (blocks loopback, RFC 1918, link-local `169.254.0.0/16`, IPv4-mapped IPv6, etc.) and only allows `http`/`https`. `_CheckedRedirect` re-runs the same check on every redirect hop, so an open redirect on a public site can't bounce the request inward. The endpoint requires a valid access token, sends no credentials of its own, returns only `og:`/`<title>` text (never raw response bodies), and reads at most 512 KB with a 5 s timeout. Covered by `tests/test_links.py`.
+
+**Accepted residual risk:** DNS rebinding — the host is resolved once for the check and again by `urllib` when connecting, so a hostile DNS server could answer differently the second time. Exploiting it requires a valid access token, i.e. the single principal attacking themselves; pinning the connection to the checked IP isn't worth the code at this trust level.
+
+---
+
+## Finding 8 — Anyone could lock the owner out of `/auth/login` — Fixed
+
+**Severity:** Medium (availability)
+
+**Where:** `backend/app/auth.py`, `backend/app/db.py`, `backend/app/main.py`, `yaadi-app/worker.js`
+
+**Issue:** The Finding 1 lockout used a single global counter. Anyone who knew the Function URL (it was compiled into the public JS bundle) could send 5 wrong passwords and lock the owner out, escalating to 24 h lockouts indefinitely. Already-logged-in devices kept working until their 30-day refresh token expired, but no new login was possible.
+
+**Fix:** 
+- The lockout is now keyed per client IP (`LOGIN_THROTTLE#<ip>`), so a guesser only locks out their own IP.
+- The IP has to be trustworthy for that to mean anything. All traffic now goes through a Cloudflare Worker that sets `X-Client-IP` from Cloudflare's `CF-Connecting-IP` (overwriting anything the caller sent) and adds `X-Origin-Secret`. In Lambda, a middleware in `main.py` 403s every request without the secret (constant-time compare), so the raw Function URL can't be used to spoof `X-Client-IP` or bypass Cloudflare.
+- Covered by `test_lockout_is_per_client_ip` and `tests/test_main.py`.
+
+**Accepted tradeoffs:**
+- A distributed guesser now gets 5 attempts per IP per escalation step instead of 5 total. With argon2 and a strong password this is still impractical; add a Cloudflare rate-limiting rule on `api.yaadi.jaylabs.uk/auth/login` if that ever changes.
+- Rejected requests still invoke the Lambda for a few milliseconds (~$0.40 per million), so a flood against the raw Function URL costs a little money but can't reach any logic.
+- Throttle items for IPs that never log in successfully are never deleted (tiny; add a DynamoDB TTL if needed).
+- Rotating the origin secret needs both sides updated: SSM `/yaadi/origin_secret` and `wrangler secret put ORIGIN_SECRET`. Warm Lambdas keep the old SSM value until their next cold start.
 
 ---
 

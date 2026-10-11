@@ -40,3 +40,19 @@ def test_delete_note_is_soft_and_hides_from_list(client, auth_headers):
 def test_get_missing_note_404(client, auth_headers):
     resp = client.get("/notes/does-not-exist", headers=auth_headers)
     assert resp.status_code == 404
+
+
+def test_patch_null_title_is_rejected_and_does_not_break_list(client, auth_headers):
+    # A null on a non-nullable field used to be written straight to DynamoDB,
+    # after which every read of that note (and GET /notes) 500'd.
+    note = client.post("/notes", json={"title": "A"}, headers=auth_headers).json()
+    resp = client.patch(f"/notes/{note['id']}", json={"title": None}, headers=auth_headers)
+    assert resp.status_code == 422
+    assert client.get("/notes", headers=auth_headers).status_code == 200
+
+
+def test_patch_null_folder_id_moves_note_to_root(client, auth_headers):
+    note = client.post("/notes", json={"folder_id": "f1"}, headers=auth_headers).json()
+    resp = client.patch(f"/notes/{note['id']}", json={"folder_id": None}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["folder_id"] is None

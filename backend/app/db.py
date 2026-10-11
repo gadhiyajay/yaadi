@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 
 # Single hardcoded account -- no users table, see docs/BACKEND_ARCHITECTURE.md.
 USER_ID = "me"
@@ -30,6 +30,12 @@ def _table():
     if _resource is None:
         _resource = boto3.resource("dynamodb")
     return _resource.Table(TABLE_NAME)
+
+
+def now() -> str:
+    # Fixed microsecond precision: timestamps are compared as strings, and
+    # isoformat() silently drops ".000000" when microsecond == 0.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def user_pk() -> str:
@@ -54,6 +60,21 @@ def gsi1_sk(updated_at: str, item_id: str) -> str:
 
 def put_item(item: dict) -> None:
     _table().put_item(Item=item)
+
+
+def put_if_newer(item: dict) -> bool:
+    """Writes `item` only if nothing is stored under its key yet or the stored
+    `updated_at` is strictly older -- one atomic call, so two devices pushing
+    the same item at once can't have the older write land last.
+    Returns False (nothing written) if the stored copy is as new or newer."""
+    try:
+        _table().put_item(
+            Item=item,
+            ConditionExpression=Attr("SK").not_exists() | Attr("updated_at").lt(item["updated_at"]),
+        )
+        return True
+    except _table().meta.client.exceptions.ConditionalCheckFailedException:
+        return False
 
 
 def get_item(sk: str) -> Optional[dict]:
@@ -114,7 +135,7 @@ def record_login_failure(ip: str, lockout_threshold: int, lockout_durations_seco
     item = get_login_throttle(ip) or {}
     lockout_count = int(item.get("lockout_count", 0)) + 1
     duration = lockout_durations_seconds[min(lockout_count - 1, len(lockout_durations_seconds) - 1)]
-    locked_until = (datetime.now(timezone.utc) + timedelta(seconds=duration)).isoformat()
+    locked_until = (datetime.now(timezone.utc) + timedelta(seconds=duration)).isoformat(timespec="microseconds")
 
     _table().update_item(
         Key={"PK": user_pk(), "SK": login_throttle_sk(ip)},

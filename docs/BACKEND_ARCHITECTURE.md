@@ -64,7 +64,7 @@ One table, `yaadi`. Partition key `PK`, sort key `SK`. Partitioning by `USER#<id
 | Folder | `USER#<id>` | `FOLDER#<folder_id>` | `name`, `parent_folder_id`, `created_at` |
 | Attachment metadata | `USER#<id>` | `ATTACHMENT#<attachment_id>` | `note_id`, `s3_key`, `content_type`, `size_bytes` |
 
-**GSI1** (`GSI1PK` = `USER#<id>`, `GSI1SK` = `UPDATED#<iso_timestamp>#<item_id>`) — exists purely to serve the sync endpoint's "give me everything changed since timestamp X" query efficiently, across notes/folders/attachments alike.
+**GSI1** (`GSI1PK` = `USER#<id>`, `GSI1SK` = `UPDATED#<server_write_time>#<item_id>`) — the server's own clock at write time, never the client's `updated_at`; exists purely to serve the sync endpoint's "give me everything changed since timestamp X" query efficiently, across notes/folders/attachments alike.
 
 Deletes are **soft deletes** (`deleted_at` set, item kept) so that deletions can propagate through sync as tombstones — a device that was offline when you deleted a note still needs to be told to delete its local copy.
 
@@ -72,8 +72,8 @@ Deletes are **soft deletes** (`deleted_at` set, item kept) so that deletions can
 
 See [`APP_ARCHITECTURE.md`](APP_ARCHITECTURE.md) for the client-side half of this. Server side is intentionally simple — last-write-wins by `updated_at`, no operational transforms:
 
-- `GET /sync/pull?since=<iso_timestamp>` → all notes/folders where `updated_at > since` (via GSI1), including soft-deleted tombstones.
-- `POST /sync/push` with a batch of locally-changed items → backend writes each one, but **only if** the client's `updated_at` is newer than what's already stored (last-write-wins check) — otherwise the server's version wins and is returned back to the client so it can reconcile.
+- `GET /sync/pull?since=<cursor>` → all notes/folders *written to the server* after `since` (via GSI1), including soft-deleted tombstones. The returned `synced_at` cursor is a server write time held 5s behind now, so a client clock that runs slow can't make another device skip an item. Treat it as opaque.
+- `POST /sync/push` with a batch of locally-changed items → backend writes each one (atomically, via a DynamoDB condition), but **only if** the client's `updated_at` is newer (a future `updated_at` is first capped to server now) than what's already stored (last-write-wins check) — otherwise the server's version wins and is returned back to the client so it can reconcile.
 
 ## Attachments
 

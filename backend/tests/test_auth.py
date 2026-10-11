@@ -61,3 +61,14 @@ def test_successful_login_resets_the_failure_counter(client):
     # shouldn't trip the lockout.
     resp = client.post("/auth/login", json={"password": "wrong"})
     assert resp.status_code == 401
+
+
+def test_lockout_is_per_client_ip(client):
+    attacker = {"X-Client-IP": "203.0.113.9"}
+    for _ in range(LOGIN_LOCKOUT_THRESHOLD):
+        assert client.post("/auth/login", json={"password": "wrong"}, headers=attacker).status_code == 401
+    assert client.post("/auth/login", json={"password": TEST_PASSWORD}, headers=attacker).status_code == 429
+
+    # The owner, on another IP, isn't locked out by someone else's failures.
+    owner = {"X-Client-IP": "198.51.100.7"}
+    assert client.post("/auth/login", json={"password": TEST_PASSWORD}, headers=owner).status_code == 200

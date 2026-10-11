@@ -13,6 +13,8 @@ from argon2.exceptions import VerifyMismatchError
 
 PASSWORD_HASH_PARAM = "/yaadi/password_hash"
 JWT_SECRET_PARAM = "/yaadi/jwt_secret"
+# Shared with the Cloudflare Worker (yaadi-app/worker.js) -- see main.py.
+ORIGIN_SECRET_PARAM = "/yaadi/origin_secret"
 
 ACCESS_TOKEN_EXPIRY_SECONDS = 15 * 60
 REFRESH_TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
@@ -44,6 +46,10 @@ def get_password_hash() -> str:
 
 def get_jwt_secret() -> str:
     return _get_ssm_param(JWT_SECRET_PARAM)
+
+
+def get_origin_secret() -> str:
+    return _get_ssm_param(ORIGIN_SECRET_PARAM)
 
 
 def verify_password(password: str) -> bool:

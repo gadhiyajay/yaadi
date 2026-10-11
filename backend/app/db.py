@@ -15,7 +15,12 @@ from boto3.dynamodb.conditions import Key
 USER_ID = "me"
 TABLE_NAME = os.environ.get("TABLE_NAME", "yaadi")
 
-LOGIN_THROTTLE_SK = "LOGIN_THROTTLE"
+# One throttle item per client IP: a global counter would let anyone who can
+# reach /auth/login lock the owner out just by failing 5 times.
+# shortcut: items for IPs that never log in successfully are never deleted
+# (tiny; add a DynamoDB TTL if the table ever fills up with them).
+def login_throttle_sk(ip: str) -> str:
+    return f"LOGIN_THROTTLE#{ip}"
 
 _resource = None
 
@@ -83,11 +88,11 @@ def query_updated_since(since: str) -> list[dict]:
     return items
 
 
-def get_login_throttle() -> Optional[dict]:
-    return get_item(LOGIN_THROTTLE_SK)
+def get_login_throttle(ip: str) -> Optional[dict]:
+    return get_item(login_throttle_sk(ip))
 
 
-def record_login_failure(lockout_threshold: int, lockout_durations_seconds: list[int]) -> Optional[str]:
+def record_login_failure(ip: str, lockout_threshold: int, lockout_durations_seconds: list[int]) -> Optional[str]:
     """Atomically bumps the failed-login counter. Once it reaches
     `lockout_threshold`, escalates into a lockout (duration taken from
     `lockout_durations_seconds`, indexed by how many times this has
@@ -97,7 +102,7 @@ def record_login_failure(lockout_threshold: int, lockout_durations_seconds: list
     triggered, else None.
     """
     resp = _table().update_item(
-        Key={"PK": user_pk(), "SK": LOGIN_THROTTLE_SK},
+        Key={"PK": user_pk(), "SK": login_throttle_sk(ip)},
         UpdateExpression="ADD failed_count :one",
         ExpressionAttributeValues={":one": 1},
         ReturnValues="UPDATED_NEW",
@@ -106,18 +111,18 @@ def record_login_failure(lockout_threshold: int, lockout_durations_seconds: list
     if failed_count < lockout_threshold:
         return None
 
-    item = get_login_throttle() or {}
+    item = get_login_throttle(ip) or {}
     lockout_count = int(item.get("lockout_count", 0)) + 1
     duration = lockout_durations_seconds[min(lockout_count - 1, len(lockout_durations_seconds) - 1)]
     locked_until = (datetime.now(timezone.utc) + timedelta(seconds=duration)).isoformat()
 
     _table().update_item(
-        Key={"PK": user_pk(), "SK": LOGIN_THROTTLE_SK},
+        Key={"PK": user_pk(), "SK": login_throttle_sk(ip)},
         UpdateExpression="SET locked_until = :lu, lockout_count = :lc, failed_count = :zero",
         ExpressionAttributeValues={":lu": locked_until, ":lc": lockout_count, ":zero": 0},
     )
     return locked_until
 
 
-def clear_login_throttle() -> None:
-    _table().delete_item(Key={"PK": user_pk(), "SK": LOGIN_THROTTLE_SK})
+def clear_login_throttle(ip: str) -> None:
+    _table().delete_item(Key={"PK": user_pk(), "SK": login_throttle_sk(ip)})

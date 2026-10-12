@@ -4,6 +4,8 @@ The password hash and JWT signing secret live in SSM Parameter Store
 (set once via scripts/set_password.py) and are cached in memory for the
 Lambda execution context's lifetime -- see docs/BACKEND_ARCHITECTURE.md.
 """
+import hashlib
+import hmac
 import time
 
 import boto3
@@ -15,6 +17,7 @@ PASSWORD_HASH_PARAM = "/yaadi/password_hash"
 JWT_SECRET_PARAM = "/yaadi/jwt_secret"
 # Shared with the Cloudflare Worker (yaadi-app/worker.js) -- see main.py.
 ORIGIN_SECRET_PARAM = "/yaadi/origin_secret"
+MCP_TOKEN_HASH_PARAM = "/yaadi/mcp_token_hash"
 
 ACCESS_TOKEN_EXPIRY_SECONDS = 15 * 60
 REFRESH_TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
@@ -50,6 +53,18 @@ def get_jwt_secret() -> str:
 
 def get_origin_secret() -> str:
     return _get_ssm_param(ORIGIN_SECRET_PARAM)
+
+
+def verify_mcp_token(token: str) -> bool:
+    """The MCP bearer token (scripts/set_mcp_token.py) -- only its SHA-256 is
+    stored. Deliberately not cached like the other params: re-running the
+    script has to revoke the old token now, not at the next cold start."""
+    try:
+        resp = _ssm().get_parameter(Name=MCP_TOKEN_HASH_PARAM, WithDecryption=True)
+    except _ssm().exceptions.ParameterNotFound:
+        return False  # no token set yet == MCP disabled
+    sent = hashlib.sha256(token.encode()).hexdigest()
+    return hmac.compare_digest(sent, resp["Parameter"]["Value"])
 
 
 def verify_password(password: str) -> bool:

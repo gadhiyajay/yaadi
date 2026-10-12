@@ -17,6 +17,7 @@ import attachments
 import auth
 import folders
 import links
+import mcp_server
 import notes
 import security
 import sync
@@ -51,6 +52,7 @@ app.include_router(folders.router)
 app.include_router(sync.router)
 app.include_router(attachments.router)
 app.include_router(links.router)
+app.include_router(mcp_server.router)
 
 
 @app.get("/health")

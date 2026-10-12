@@ -26,6 +26,9 @@ sam build && sam deploy
 
 # rotate/set the login password + JWT secret in SSM (one-off, local, needs AWS creds)
 python scripts/set_password.py
+
+# create/rotate the MCP bearer token (prints it once; revokes the previous one)
+python scripts/set_mcp_token.py
 ```
 
 There's no separate lint command configured; match existing style (no formatter/linter enforced in CI).
@@ -51,6 +54,8 @@ There's no separate lint command configured; match existing style (no formatter/
 **Attachments never transit the Lambda payload** — `attachments.py` only ever hands out short-lived (5 min) S3 presigned PUT/GET URLs; the actual file bytes go client ↔ S3 directly.
 
 **`links.py` fetches user-supplied URLs** (`GET /links/preview`, og:title/description via stdlib only) — every fetch and every redirect hop goes through `_check_public`, which refuses non-public IPs. Keep that guard on any new outbound fetch (see Finding 7 in `docs/SECURITY_AUDIT.md`).
+
+**`mcp_server.py` is an MCP server at `POST /mcp`** (Claude reads/writes notes through it; see `docs/MCP_SERVER_PLAN.md`). Hand-rolled stateless JSON-RPC, not the `mcp` SDK — the SDK's session manager breaks under Mangum, which runs the ASGI lifespan per invocation. Never name a module `mcp.py` (`app/` is flattened onto `sys.path`, it would shadow the package). Tools call the same `notes.*`/`folders.*` route functions as the REST API, so sync/timestamps/soft deletes stay identical — keep it that way rather than writing to `db` directly. Auth is its own bearer token (SHA-256 in SSM `/yaadi/mcp_token_hash`, read uncached so rotation revokes immediately); PWA JWTs don't open `/mcp` and the MCP token doesn't open the REST API. Notes tagged `private` are invisible to every MCP tool (`_is_private`) — new tools must go through `_visible_notes`/`_get_visible`.
 
 **CORS is handled only by the Function URL's own config in `template.yaml`** (`AllowedOrigins` parameter), not by FastAPI middleware — adding `CORSMiddleware` in `main.py` would double up the `Access-Control-Allow-Origin` header. See the module docstring in `main.py` before touching CORS.
 

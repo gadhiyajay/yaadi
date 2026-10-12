@@ -1,91 +1,156 @@
-# Yaadi — Backend
+# Yaadi: backend
 
-FastAPI backend for [Yaadi](https://github.com/gadhiyajay/yaadi-app), a single-user, Obsidian/Notion-flavored note app built to work offline-first with near-zero hosting cost. This repo is the API; the PWA frontend lives in [`yaadi-app`](https://github.com/gadhiyajay/yaadi-app).
+**Yaadi** is a personal, offline-first notes app for one person, on phone and laptop. Notes are written in Markdown, sync between devices, and work without internet. It runs on AWS for about **$0/month**.
 
-## Decisions locked in
+This repo is **only the backend** (the API). There's no frontend here on purpose. Instead, [`prompt.md`](prompt.md) describes exactly what a frontend needs to do, so you can paste it into an AI coding assistant and have it build one for you.
 
-| Question | Decision | Why |
-|---|---|---|
-| Offline support | **Offline-first with sync** | The client treats the local copy as the source of truth and syncs in the background. |
-| App delivery | **PWA** (installable web app) | One React codebase → phone + laptop, no app store fees, free hosting. |
-| Note format | **Markdown documents** | Simple schema, trivially exportable/backup-able, matches Obsidian mental model. |
-| Cloud | **AWS** (Lambda + DynamoDB) | Both have a *perpetual* free tier (not just 12 months) — realistically $0/mo for one user. |
-| Auth | **Fixed single-user password login** | No signup flow, no multi-tenant complexity — just you. |
+---
 
-## Tech stack at a glance
+## How it fits together
 
-- **Backend**: FastAPI, wrapped for Lambda via Mangum.
-- **Database**: DynamoDB (single-table design).
-- **File storage**: S3 (for pasted images/attachments).
-- **Auth**: single-user password login → JWT access + refresh tokens. No OAuth, no user table.
-- **Infra**: AWS Lambda (Function URL, not API Gateway), DynamoDB, S3, SSM Parameter Store — deployed via AWS SAM.
+```
+ Your app (PWA, in the browser)
+        │
+        ▼
+ Cloudflare Worker  ── adds a secret header + the caller's IP
+        │
+        ▼
+ AWS Lambda (this repo: FastAPI)
+        │
+        ├── DynamoDB          notes & folders
+        ├── S3                images (uploaded/downloaded directly by the app)
+        └── SSM Param Store   password hash, JWT secret, other secrets
+```
 
-## Docs
+- **Single user.** One password and no sign-up. Nobody else can create an account.
+- **Offline-first.** The app keeps everything locally and syncs in the background. If two devices edit the same note, the most recent edit wins.
+- **Cheap.** Lambda, DynamoDB and S3 all have free tiers that one person won't outgrow.
+- **Optional AI access.** Claude (or another MCP client) can read and write your notes through a built-in MCP server.
 
-- [`docs/BACKEND_ARCHITECTURE.md`](docs/BACKEND_ARCHITECTURE.md) — FastAPI on Lambda, DynamoDB schema, auth, sync API, attachments.
-- [`docs/INFRA_AND_COST.md`](docs/INFRA_AND_COST.md) — exact AWS resources, why Lambda over EC2/GCP, cost table, deploy tooling.
-- [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) — a self-audit of the auth/trust model against this single-user design. Read this before deploying your own copy with real data in it.
-- Frontend/client half of the sync contract: [`yaadi-app`'s README](https://github.com/gadhiyajay/yaadi-app).
+## What you need
 
-## Running locally
+- An **AWS account** + the [AWS CLI](https://aws.amazon.com/cli/) (run `aws configure` once)
+- The [**AWS SAM CLI**](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+- **Python 3.11+**
+- A **Cloudflare account** with a domain on it (the free plan is fine), used for the Worker that sits in front of the API
 
-Requires Python 3.11+.
+## Set it up (about 20 minutes)
+
+### 1. Get the code and install
 
 ```bash
-cd backend
+git clone https://github.com/gadhiyajay/yaadi.git
+cd yaadi/backend
 python -m venv .venv
-.venv/Scripts/activate   # or `source .venv/bin/activate` on macOS/Linux
+.venv/Scripts/activate        # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-### Tests
+Optional: run `pytest` to check everything works. The tests fake AWS, so they don't need an account.
 
-Tests mock all AWS calls via [`moto`](https://github.com/getmoto/moto) — no AWS account or credentials needed to run them.
+### 2. Make it yours
+
+Open `backend/samconfig.toml` and change:
+
+- `region`: the AWS region you want (use the same one everywhere below)
+- `stack_name`: any name you like
+- `AllowedOrigins`: **your** frontend's URL, e.g. `https://notes.your-domain.com` (you can keep `http://localhost:5173` for local development)
+
+### 3. Set your password
 
 ```bash
-cd backend
-pytest                      # whole suite
-pytest tests/test_auth.py   # one file
-pytest tests/test_auth.py::test_login_locks_out_after_repeated_failures  # one test
+python scripts/set_password.py
 ```
 
-## Deploying your own instance
+This asks for a password, stores a secure hash of it in AWS (it never stores the password itself), and creates the secret used to sign login tokens. Run it again any time to change your password. That also signs out every device.
 
-This deploys a Lambda function, a DynamoDB table, an S3 bucket, and an IAM role scoped to just those two resources — nothing shared with anyone else's deployment.
+### 4. Create the origin secret
 
-1. Install the [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) and configure AWS credentials (`aws configure`) for an account you control.
-2. Edit `backend/samconfig.toml` — change `stack_name`, `region`, and `AllowedOrigins` (your own frontend's URL, not `yaadi.jaylabs.uk`) to your own values.
-3. Bootstrap your password and JWT signing secret (writes to SSM Parameter Store, run once with your AWS credentials):
-   ```bash
-   python backend/scripts/set_password.py
-   ```
-4. Build and deploy:
-   ```bash
-   ./backend/scripts/deploy.ps1   # or: sam build && sam deploy, from backend/
-   ```
-5. Note the `FunctionUrl` output and point the frontend's `VITE_API_BASE_URL` at it (see `yaadi-app`'s README).
-6. Optional — let Claude read and write your notes over MCP (see [`docs/MCP_SERVER_PLAN.md`](docs/MCP_SERVER_PLAN.md)). This prints a token and the `claude mcp add` command to use it; re-run it to revoke the old token:
-   ```bash
-   python backend/scripts/set_mcp_token.py
-   ```
+The backend only answers requests that come through your Cloudflare Worker. The two share a secret. Generate one:
 
-No secrets are stored in this repo or in CloudFormation parameters in plaintext — the password hash and JWT secret live only in SSM `SecureString` parameters.
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
-## Security model
+Save it in AWS (replace `<secret>` with the value you just generated):
 
-This is a single-user hobby app, not a multi-tenant SaaS — see the "Trust model note" at the top of [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) for what that does and doesn't mean for findings there. If you find a new issue, please open an issue rather than a PR with the exploit details for anything that could affect a live deployment (there isn't a shared hosted instance, so this mostly matters for your own fork).
+```bash
+aws ssm put-parameter --name /yaadi/origin_secret --type SecureString --value "<secret>"
+```
 
-## Open items / future enhancements (deliberately deferred, not forgotten)
+Keep this value handy. You'll give the **exact same** one to the Worker in step 6.
 
-- Full CRDT-based conflict resolution — using simple last-write-wins for now since it's one person on 1-2 devices; real concurrent-edit conflicts are rare. Revisit only if it ever causes a real lost edit.
-- Multi-user support — the DynamoDB schema is already partitioned by `USER#<id>` so this wouldn't require a redesign, just an added signup flow.
-- Server-side full-text search (e.g. OpenSearch) — not needed because offline-first means every note already lives on-device, so search runs client-side for free.
-- Custom domain — optional, not required to use the app.
-- Token revocation on password change, and rate-limiting hardening — see open findings in `docs/SECURITY_AUDIT.md`.
+### 5. Deploy
+
+```bash
+sam build && sam deploy
+# Windows alternative: ./scripts/deploy.ps1
+```
+
+When it finishes, copy the **`FunctionUrl`** from the output. It looks like `https://abc123….lambda-url.us-east-1.on.aws/`.
+
+### 6. Build the frontend + Worker
+
+Paste [`prompt.md`](prompt.md) into your AI coding assistant in a new folder. Section 9 of it covers the Worker. You'll need to:
+
+- Put your `FunctionUrl` (without the trailing `/`) in the Worker's `API_ORIGIN`.
+- Run `npx wrangler secret put ORIGIN_SECRET` and paste the secret from step 4.
+- Point the frontend's `VITE_API_BASE_URL` at your Worker's API domain (e.g. `https://api.your-domain.com`).
+
+**Every request returns `403 Forbidden`?** The secret in the Worker doesn't exactly match the one in AWS. The usual cause is a stray newline, often added when piping the value in PowerShell. Paste it in interactively instead. If you changed the value in AWS, the running Lambda may still have the old one cached for a while. Redeploying makes it pick up the new one right away.
+
+### 7. Optional: let Claude use your notes
+
+```bash
+python scripts/set_mcp_token.py
+```
+
+This prints a token and the `claude mcp add` command to run. The command it prints uses the original author's domain, so replace that URL with your own `https://api.your-domain.com/mcp`. Run the script again to replace the token (the old one stops working immediately). Notes tagged `private` are never visible to Claude. More details are in [`docs/MCP_SERVER_PLAN.md`](docs/MCP_SERVER_PLAN.md).
+
+## The API at a glance
+
+| Area | Endpoints |
+|---|---|
+| Auth | `POST /auth/login`, `POST /auth/refresh` |
+| Sync | `POST /sync/push`, `GET /sync/pull?since=` |
+| Notes / folders | `GET POST /notes`, `GET PATCH DELETE /notes/{id}` (same for `/folders`) |
+| Images | `POST /attachments/presign-upload`, `GET /attachments/{id}/download-url` |
+| Link previews | `GET /links/preview?url=` |
+| AI (MCP) | `POST /mcp` |
+| Health | `GET /health` |
+
+The full request/response details are in [`prompt.md`](prompt.md).
+
+## Security, in short
+
+- No secrets live in this repo. Everything sensitive is in AWS SSM as encrypted `SecureString`s.
+- Passwords are hashed with argon2. Login tokens expire after 15 minutes (refresh tokens after 30 days).
+- 5 wrong passwords from one IP lock that IP out, starting at 1 minute and growing up to 24 hours. Other IPs (like yours) aren't affected.
+- Images never pass through the API. The app gets short-lived (5-minute) S3 links instead.
+- The link-preview fetcher refuses to reach private or internal network addresses.
+
+[`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md) is an honest self-audit, including the trade-offs accepted for a single-user app. Please read it before you store anything important.
+
+**Found a security issue?** Please open an issue describing it, without exploit details, rather than a public PR.
+
+## More docs
+
+- [`docs/BACKEND_ARCHITECTURE.md`](docs/BACKEND_ARCHITECTURE.md): database layout, auth, sync, attachments
+- [`docs/INFRA_AND_COST.md`](docs/INFRA_AND_COST.md): AWS resources and what they cost
+- [`docs/SECURITY_AUDIT.md`](docs/SECURITY_AUDIT.md): the security self-audit
+- [`docs/MCP_SERVER_PLAN.md`](docs/MCP_SERVER_PLAN.md): the MCP server for Claude
+- [`docs/LINK_SUMMARIES_PLAN.md`](docs/LINK_SUMMARIES_PLAN.md): link previews
+
+## Deliberately not done (yet)
+
+- **Real-time conflict merging (CRDTs).** Last-write-wins is enough for one person on a couple of devices.
+- **Multiple users.** The database is already split per user, so it would mostly mean adding sign-up.
+- **Server-side search.** Every note is already on the device, so search runs there for free.
+- **Revoking a single login token.** Changing your password signs out *all* devices, which covers the "lost my phone" case.
 
 ## Contributing
 
-This started as a personal project but issues and PRs are welcome — especially for the hardening items above. Please run `pytest` before opening a PR.
+Issues and PRs are welcome. Please run `pytest` (from `backend/`) before opening a PR.
 
 ## License
 

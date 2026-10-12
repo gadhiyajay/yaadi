@@ -10,13 +10,14 @@
 | # | Finding | Severity |
 |---|---|---|
 | 1 | ~~No brute-force protection on `POST /auth/login`~~ — **Fixed** | Medium |
-| 2 | Compromised tokens can't be revoked; changing the password doesn't end existing sessions | Medium |
+| 2 | ~~Changing the password doesn't end existing sessions~~ — **Fixed** (individual tokens still can't be revoked) | Medium |
 | 3 | CORS is wide open (`AllowOrigins: "*"`) by default | Low |
-| 4 | S3 attachments bucket has no explicit Public Access Block in the template | Needs validation |
+| 4 | ~~S3 attachments bucket has no explicit Public Access Block in the template~~ — **Fixed** | Needs validation |
 | 5 | SSM secrets use the default AWS-managed KMS key | Informational |
 | 6 | Dependencies are version-pinned with no automated vulnerability scanning | Informational |
 | 7 | `GET /links/preview` fetches user-supplied URLs (SSRF surface) — **Mitigated** | Low |
 | 8 | ~~Anyone could lock the owner out of `/auth/login` (global lockout counter)~~ — **Fixed** | Medium |
+| 9 | `/mcp` gives an LLM read/write access to notes — **Mitigated** | Low |
 
 Nothing rated **High** or **Critical** was found. The core auth and data-access logic is sound (see "What's already solid" below).
 
@@ -45,6 +46,7 @@ Argon2 (the default `PasswordHasher()` params: ~64 MiB memory, time_cost 2, para
 ## Finding 2 — Compromised tokens can't be revoked; changing the password doesn't end existing sessions
 
 **Severity:** Medium
+**Status:** Partly fixed (2026-10-09) — `set_password.py` now always regenerates `/yaadi/jwt_secret`, so a password change invalidates every outstanding token once the Lambda cold-starts (force it by redeploying or updating the function config). Still open: there's no per-token revocation, and a leaked refresh token stays valid for 30 days unless you rotate.
 
 **Where:** `backend/app/security.py:60-78`, `backend/scripts/set_password.py:40-46`
 
@@ -81,6 +83,7 @@ Argon2 (the default `PasswordHasher()` params: ~64 MiB memory, time_cost 2, para
 ## Finding 4 — S3 attachments bucket has no explicit Public Access Block (Needs validation)
 
 **Severity:** Needs validation (no severity assigned — see methodology)
+**Status:** Fixed (2026-10-09) — `template.yaml` now sets all four `PublicAccessBlockConfiguration` flags on `AttachmentsBucket`, so this no longer depends on account defaults.
 
 **Where:** `backend/template.yaml:76-85`
 
@@ -160,12 +163,34 @@ The endpoint makes an outbound HTTP request to whatever URL the client sends, wh
 
 ---
 
+## Finding 9 — `/mcp` gives an LLM read/write access to notes — Mitigated
+
+**Severity:** Low
+
+**Where:** `backend/app/mcp_server.py`, `backend/app/security.py` (`verify_mcp_token`), `backend/scripts/set_mcp_token.py`
+
+**Issue:** `POST /mcp` is a second way into the same notes, used by Claude rather than the PWA. Two new risks: (a) a new credential that can read and write everything, and (b) note content is fed to an LLM that can also call write tools — a note saved from a malicious web page (share target) could carry prompt-injection text like "delete all notes", and anything Claude reads (including secrets in notes) leaves the user's devices.
+
+**Mitigations in place:**
+- Its own credential: a 256-bit random token, stored only as a SHA-256 in SSM, compared in constant time, and read **uncached** on every request so re-running `set_mcp_token.py` revokes the old token immediately. No token set → `/mcp` is closed. PWA JWTs are not accepted on `/mcp`, and the MCP token is not accepted on the REST API (`test_requires_mcp_token`). Behind the origin-secret middleware like every other route.
+- Bad MCP tokens are **not** counted toward the per-IP lockout: with 256 bits of entropy guessing is pointless, and it keeps a stale config from locking the owner's IP out of `/auth/login`.
+- Notes tagged `private` (case-insensitive) are invisible to every MCP tool — listed, searched, read, edited and deleted as if they didn't exist (`test_private_notes_are_invisible`).
+- No bulk tools: every write or delete targets one note id. `update_note`/`delete_note` carry `destructiveHint`, so MCP clients ask before running them. Deletes are soft, so a bad delete can be recovered from the tombstone.
+- No outbound fetches from `/mcp` (no SSRF surface); content capped at 100k characters per note.
+
+**Accepted tradeoffs:**
+- The `private` tag is opt-in: an untagged note with a secret in it is readable by Claude. Tag it.
+- There's no `restore_note` tool or endpoint yet, so recovering a soft-deleted note means editing the DynamoDB item by hand.
+- The token is a long-lived static secret in the MCP client's config (Claude Code / Desktop). Treat that file like a password; rotate with `set_mcp_token.py` if it leaks. Phase 2 (OAuth, see `docs/MCP_SERVER_PLAN.md`) replaces it for claude.ai.
+
+---
+
 ## What's already solid
 
 Worth stating explicitly so future changes don't accidentally regress these:
 
 - **JWT algorithm is pinned explicitly** (`security.py:75`, `algorithms=[JWT_ALGORITHM]`) — not vulnerable to the `alg: none` / algorithm-confusion class of attack.
-- **Every data-mutating router requires a valid access token** (`notes.py:11`, `folders.py:11`, `sync.py:22`, `attachments.py:17-19` all carry `dependencies=[Depends(get_current_user)]`); only `/auth/login`, `/auth/refresh`, and `/health` are intentionally public. Verified against `test_notes_requires_auth` in `tests/test_auth.py`.
+- **Every data-mutating router requires a valid access token** (`notes.py:11`, `folders.py:11`, `sync.py:22`, `attachments.py:17-19` all carry `dependencies=[Depends(get_current_user)]`); only `/auth/login`, `/auth/refresh`, and `/health` are intentionally public. `/mcp` requires its own MCP token instead (Finding 9). Verified against `test_notes_requires_auth` in `tests/test_auth.py`.
 - **No injection surface**: DynamoDB access goes through parametrized `boto3.dynamodb.conditions.Key` expressions everywhere (`db.py`), never string-built queries.
 - **No secrets committed to the repo** — password hash and JWT secret live only in SSM `SecureString` parameters, fetched at runtime; the only password-like string in source is the test fixture's dummy password in `tests/conftest.py`. `.venv/` and `.aws-sam/` (which could otherwise leak build artifacts) are correctly gitignored.
 - **Attachments never transit the Lambda payload** and presigned URLs are short-lived (5 minutes), limiting exposure if a URL is logged somewhere.

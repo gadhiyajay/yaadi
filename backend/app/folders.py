@@ -1,6 +1,5 @@
 """/folders CRUD."""
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -9,10 +8,6 @@ from auth import get_current_user
 from models import Folder, FolderCreate, FolderUpdate
 
 router = APIRouter(prefix="/folders", tags=["folders"], dependencies=[Depends(get_current_user)])
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def item_to_folder(item: dict) -> Folder:
@@ -31,7 +26,8 @@ def folder_to_item(folder: Folder) -> dict:
         "PK": db.user_pk(),
         "SK": db.folder_sk(folder.id),
         "GSI1PK": db.user_pk(),
-        "GSI1SK": db.gsi1_sk(folder.updated_at, folder.id),
+        # Server write time, not the client's `updated_at` -- see sync.pull.
+        "GSI1SK": db.gsi1_sk(db.now(), folder.id),
         "name": folder.name,
         "parent_folder_id": folder.parent_folder_id,
         "created_at": folder.created_at,
@@ -58,7 +54,7 @@ def get_folder(folder_id: str) -> Folder:
 
 @router.post("", response_model=Folder, status_code=201)
 def create_folder(body: FolderCreate) -> Folder:
-    now = _now()
+    now = db.now()
     folder = Folder(
         id=str(uuid.uuid4()),
         name=body.name,
@@ -77,7 +73,7 @@ def update_folder(folder_id: str, body: FolderUpdate) -> Folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     folder = item_to_folder(item)
     changes = body.model_dump(exclude_unset=True)
-    updated = folder.model_copy(update={**changes, "updated_at": _now()})
+    updated = folder.model_copy(update={**changes, "updated_at": db.now()})
     db.put_item(folder_to_item(updated))
     return updated
 
@@ -88,6 +84,6 @@ def delete_folder(folder_id: str) -> None:
     if item is None or item.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Folder not found")
     folder = item_to_folder(item)
-    now = _now()
+    now = db.now()
     deleted = folder.model_copy(update={"deleted_at": now, "updated_at": now})
     db.put_item(folder_to_item(deleted))

@@ -64,6 +64,10 @@ This deploys a Lambda function, a DynamoDB table, an S3 bucket, and an IAM role 
    ./backend/scripts/deploy.ps1   # or: sam build && sam deploy, from backend/
    ```
 5. Note the `FunctionUrl` output and point the frontend's `VITE_API_BASE_URL` at it (see `yaadi-app`'s README).
+6. Optional — let Claude read and write your notes over MCP (see [`docs/MCP_SERVER_PLAN.md`](docs/MCP_SERVER_PLAN.md)). This prints a token and the `claude mcp add` command to use it; re-run it to revoke the old token:
+   ```bash
+   python backend/scripts/set_mcp_token.py
+   ```
 
 No secrets are stored in this repo or in CloudFormation parameters in plaintext — the password hash and JWT secret live only in SSM `SecureString` parameters.
 

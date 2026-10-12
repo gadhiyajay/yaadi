@@ -1,6 +1,5 @@
 """/notes CRUD."""
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -9,10 +8,6 @@ from auth import get_current_user
 from models import Note, NoteCreate, NoteUpdate
 
 router = APIRouter(prefix="/notes", tags=["notes"], dependencies=[Depends(get_current_user)])
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def item_to_note(item: dict) -> Note:
@@ -33,7 +28,8 @@ def note_to_item(note: Note) -> dict:
         "PK": db.user_pk(),
         "SK": db.note_sk(note.id),
         "GSI1PK": db.user_pk(),
-        "GSI1SK": db.gsi1_sk(note.updated_at, note.id),
+        # Server write time, not the client's `updated_at` -- see sync.pull.
+        "GSI1SK": db.gsi1_sk(db.now(), note.id),
         "title": note.title,
         "content": note.content,
         "folder_id": note.folder_id,
@@ -62,7 +58,7 @@ def get_note(note_id: str) -> Note:
 
 @router.post("", response_model=Note, status_code=201)
 def create_note(body: NoteCreate) -> Note:
-    now = _now()
+    now = db.now()
     note = Note(
         id=str(uuid.uuid4()),
         title=body.title,
@@ -83,7 +79,7 @@ def update_note(note_id: str, body: NoteUpdate) -> Note:
         raise HTTPException(status_code=404, detail="Note not found")
     note = item_to_note(item)
     changes = body.model_dump(exclude_unset=True)
-    updated = note.model_copy(update={**changes, "updated_at": _now()})
+    updated = note.model_copy(update={**changes, "updated_at": db.now()})
     db.put_item(note_to_item(updated))
     return updated
 
@@ -94,6 +90,6 @@ def delete_note(note_id: str) -> None:
     if item is None or item.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Note not found")
     note = item_to_note(item)
-    now = _now()
+    now = db.now()
     deleted = note.model_copy(update={"deleted_at": now, "updated_at": now})
     db.put_item(note_to_item(deleted))

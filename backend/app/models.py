@@ -126,3 +126,48 @@ class SyncPullResponse(BaseModel):
     notes: list[Note]
     folders: list[Folder]
     synced_at: str
+
+
+# --- vault ---
+# The server only ever sees ciphertext: `ct`/`iv` are AES-GCM output made in
+# the browser. What an item *is* (a person, an Aadhaar entry, ...) is inside it.
+
+
+class VaultUnlockRequest(BaseModel):
+    pin: str
+
+
+class VaultUnlockResponse(BaseModel):
+    vault_token: str
+    expires_in: int
+    key: str
+
+
+class VaultStatus(BaseModel):
+    configured: bool
+    locked_until: Optional[str] = None
+
+
+class VaultItem(BaseModel):
+    id: str
+    ct: str
+    iv: str
+    updated_at: str
+    deleted_at: Optional[str] = None
+
+
+class VaultPutResult(BaseModel):
+    status: str  # "accepted" | "rejected"
+    server_item: Optional[VaultItem] = None
+
+
+class VaultPinChange(BaseModel):
+    current_pin: str
+    new_pin: str
+
+
+class VaultAuditEvent(BaseModel):
+    event: str
+    at: str
+    ip: str
+    user_agent: str = ""

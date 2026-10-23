@@ -54,6 +54,24 @@ def attachment_sk(attachment_id: str) -> str:
     return f"ATTACHMENT#{attachment_id}"
 
 
+# Vault items deliberately never get GSI1 keys, so /sync/pull (which only walks
+# GSI1) can't return them -- see vault.py.
+def vault_item_sk(item_id: str) -> str:
+    return f"VAULT#ITEM#{item_id}"
+
+
+VAULT_PIN_SK = "VAULT#PIN"
+VAULT_GLOBAL_THROTTLE_SK = "VAULT_THROTTLE#global"
+
+
+def vault_ip_throttle_sk(ip: str) -> str:
+    return f"VAULT_THROTTLE#{ip}"
+
+
+def vault_audit_sk(at: str, event_id: str) -> str:
+    return f"VAULT#AUDIT#{at}#{event_id}"
+
+
 def gsi1_sk(updated_at: str, item_id: str) -> str:
     return f"UPDATED#{updated_at}#{item_id}"
 
@@ -113,8 +131,8 @@ def get_login_throttle(ip: str) -> Optional[dict]:
     return get_item(login_throttle_sk(ip))
 
 
-def record_login_failure(ip: str, lockout_threshold: int, lockout_durations_seconds: list[int]) -> Optional[str]:
-    """Atomically bumps the failed-login counter. Once it reaches
+def record_failure(sk: str, lockout_threshold: int, lockout_durations_seconds: list[int]) -> Optional[str]:
+    """Atomically bumps the failure counter stored under `sk`. Once it reaches
     `lockout_threshold`, escalates into a lockout (duration taken from
     `lockout_durations_seconds`, indexed by how many times this has
     happened before and capped at the last entry) and resets the counter.
@@ -123,7 +141,7 @@ def record_login_failure(ip: str, lockout_threshold: int, lockout_durations_seco
     triggered, else None.
     """
     resp = _table().update_item(
-        Key={"PK": user_pk(), "SK": login_throttle_sk(ip)},
+        Key={"PK": user_pk(), "SK": sk},
         UpdateExpression="ADD failed_count :one",
         ExpressionAttributeValues={":one": 1},
         ReturnValues="UPDATED_NEW",
@@ -132,18 +150,26 @@ def record_login_failure(ip: str, lockout_threshold: int, lockout_durations_seco
     if failed_count < lockout_threshold:
         return None
 
-    item = get_login_throttle(ip) or {}
+    item = get_item(sk) or {}
     lockout_count = int(item.get("lockout_count", 0)) + 1
     duration = lockout_durations_seconds[min(lockout_count - 1, len(lockout_durations_seconds) - 1)]
     locked_until = (datetime.now(timezone.utc) + timedelta(seconds=duration)).isoformat(timespec="microseconds")
 
     _table().update_item(
-        Key={"PK": user_pk(), "SK": login_throttle_sk(ip)},
+        Key={"PK": user_pk(), "SK": sk},
         UpdateExpression="SET locked_until = :lu, lockout_count = :lc, failed_count = :zero",
         ExpressionAttributeValues={":lu": locked_until, ":lc": lockout_count, ":zero": 0},
     )
     return locked_until
 
 
+def record_login_failure(ip: str, lockout_threshold: int, lockout_durations_seconds: list[int]) -> Optional[str]:
+    return record_failure(login_throttle_sk(ip), lockout_threshold, lockout_durations_seconds)
+
+
+def delete_item(sk: str) -> None:
+    _table().delete_item(Key={"PK": user_pk(), "SK": sk})
+
+
 def clear_login_throttle(ip: str) -> None:
-    _table().delete_item(Key={"PK": user_pk(), "SK": login_throttle_sk(ip)})
+    delete_item(login_throttle_sk(ip))

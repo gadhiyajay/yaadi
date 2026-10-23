@@ -18,9 +18,14 @@ JWT_SECRET_PARAM = "/yaadi/jwt_secret"
 # Shared with the Cloudflare Worker (yaadi-app/worker.js) -- see main.py.
 ORIGIN_SECRET_PARAM = "/yaadi/origin_secret"
 MCP_TOKEN_HASH_PARAM = "/yaadi/mcp_token_hash"
+# 32 random bytes (base64) the browser encrypts the vault with; released only
+# after a correct vault PIN. Written once by scripts/set_vault_pin.py.
+VAULT_KEY_PARAM = "/yaadi/vault_key"
 
 ACCESS_TOKEN_EXPIRY_SECONDS = 15 * 60
 REFRESH_TOKEN_EXPIRY_SECONDS = 30 * 24 * 60 * 60
+# Deliberately short: the vault asks for the PIN again after this, no extension.
+VAULT_TOKEN_EXPIRY_SECONDS = 5 * 60
 
 JWT_ALGORITHM = "HS256"
 
@@ -67,6 +72,34 @@ def verify_mcp_token(token: str) -> bool:
     return hmac.compare_digest(sent, resp["Parameter"]["Value"])
 
 
+def get_vault_key() -> str:
+    return _get_ssm_param(VAULT_KEY_PARAM)
+
+
+def hash_secret(secret: str) -> str:
+    return _hasher.hash(secret)
+
+
+def verify_hash(stored_hash: str, secret: str) -> bool:
+    try:
+        return _hasher.verify(stored_hash, secret)
+    except VerifyMismatchError:
+        return False
+
+
+# The handful of PINs people pick first. A 6-digit space is small enough
+# already; these would fall to the first few guesses of any attacker.
+_COMMON_PINS = {"123123", "112233", "121212", "123321", "696969", "159753", "147258", "111222", "102030", "200000"}
+
+
+def is_weak_pin(pin: str) -> bool:
+    """All one digit, a straight run up or down (012345, 987654), or a common pick."""
+    if len(set(pin)) == 1 or pin in _COMMON_PINS:
+        return True
+    steps = {int(b) - int(a) for a, b in zip(pin, pin[1:])}
+    return steps in ({1}, {-1})
+
+
 def verify_password(password: str) -> bool:
     try:
         return _hasher.verify(get_password_hash(), password)
@@ -86,6 +119,10 @@ def create_access_token() -> str:
 
 def create_refresh_token() -> str:
     return _create_token("refresh", REFRESH_TOKEN_EXPIRY_SECONDS)
+
+
+def create_vault_token() -> str:
+    return _create_token("vault", VAULT_TOKEN_EXPIRY_SECONDS)
 
 
 def decode_token(token: str, expected_type: str) -> dict:

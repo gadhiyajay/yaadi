@@ -21,6 +21,7 @@ import mcp_server
 import notes
 import security
 import sync
+import vault
 
 # Lambda always sets this, so "running in Lambda" == prod: no public
 # /docs, /redoc or /openapi.json there. Local runs and tests keep them.
@@ -53,6 +54,7 @@ app.include_router(sync.router)
 app.include_router(attachments.router)
 app.include_router(links.router)
 app.include_router(mcp_server.router)
+app.include_router(vault.router)
 
 
 @app.get("/health")

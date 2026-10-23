@@ -52,6 +52,10 @@ Resources:
     Properties:
       TableName: yaadi
       BillingMode: PAY_PER_REQUEST
+      # Vault audit events carry a `ttl` (epoch seconds) so they expire on their own.
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
